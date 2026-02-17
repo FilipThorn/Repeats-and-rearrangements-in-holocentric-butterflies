@@ -8,3 +8,4 @@ This repository contains code and files associated with the manuscrip `Determina
 3) Inference of copy number variants
 4) Statistical association between annotation features and EBRs
 5) Inference of structural variants from short-read sequence data
+6) Phylogeny
