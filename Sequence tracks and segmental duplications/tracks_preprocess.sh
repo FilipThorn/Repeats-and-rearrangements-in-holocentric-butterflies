@@ -11,29 +11,6 @@ awk '$1!~/#/ && $3 == "gene" {print $1 "\t" $4-1 "\t" $5}' Lsin_DToL.2021_11-gen
 
 
 
-#COPY-NUMBER VARIANT / CONTROL-freec files
-
-#All 10 kb windows with a CNV score that is not 2 in all
-awk '$5 != 2{print $1 "\t" $2-1 "\t" $2+9999}' segDup.INOUTmales.inds_ratio.txt | sort -u | sort -k1,1 -k2,2n > /crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/odds_ratio/tracks/allCNVs.bed
-
-
-#All 10 kb windows with a CNV score that is not 2 in cryptic wood whites (juv, (rea, sin))
-awk '$5 != 2{print $1 "\t" $2-1 "\t" $2+9999}'  segDup.males.inds_ratio.txt | sort -u | sort -k1,1 -k2,2n > /crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/odds_ratio/tracks/sinreajuvCNVs.bed
-
-
-#All 10 kb windows with a CNV score that is not 2 in pop
-#Note these will be sample-size sensitive
-
-pops=("Leptidea_sinapis_SWE" "Leptidea_sinapis_CAT" "Leptidea_juvernica_SWE" "Leptidea_reali_CAT" "Leptidea_amurensis_MON" "Leptidea_lactea_CHI" "Leptidea_morsei_CHI")
-#Note L. duponcheli excluded
-
-for pop in "${pops[@]}"
-do
-awk -v pop="$pop" '$5 != 2 && $8 == pop {print $1 "\t" $2-1 "\t" $2+9999}'  segDup.INOUTmales.inds_ratio.txt  | sort -u | sort -k1,1 -k2,2n > /crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/odds_ratio/tracks/${pop}_CNVs.bed
-done
-
-
-
 #SEGMENTAL DUPLICATIONs from StainedGlass 2kb windows non non-masked genome postprocessing
 
 #Concatenate all chromosome-specific beds
@@ -42,7 +19,7 @@ cat merged_beds/*bed > allChrs.largeSD.step1.bed
 
 module load BEDTools/2.31.1-GCC-13.3.0
 
-dir="/crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/SegDups_from_SG"
+dir="../SegDups_from_SG"
 
 bedtools coverage -a $dir/allChrs.largeSD.step1.bed -b satellites.bed > allChrs.largeSD.step1.sats.coverage.txt
 
@@ -51,7 +28,7 @@ awk '$NF <= 0.5' allChrs.largeSD.step1.sats.coverage.txt > allChrs.largeSD.lessT
 
 #REPEATMASKER OUTPUT
 module load BEDTools/2.31.1-GCC-13.3.0
-RMSKout="/crex/proj/uppstore2017185/b2014034_nobackup/FilipT/Leptidea/01.genomes/LsinapisAstM/Lsin_DToL.fasta.out"
+RMSKout="../01.genomes/LsinapisAstM/Lsin_DToL.fasta.out"
 
 awk 'NR>3{print $5 "\t" $6-1 "\t" $7 "\t" $11}' "$RMSKout"  > RMSKout.bed
 
@@ -73,21 +50,21 @@ awk '$4 ~/^Unknown/' RMSKout.noSat.bed > Unknown_repeats.bed
 
 
 #Telomeres from RepeatMasker
-RMSKout="/crex/proj/uppstore2017185/b2014034_nobackup/FilipT/Leptidea/01.genomes/LsinapisAstM/Lsin_DToL.fasta.out"
+RMSKout="../01.genomes/LsinapisAstM/Lsin_DToL.fasta.out"
 
 grep -Ew "TTAGG|AATCC|GGATT|CCTAA" "$RMSKout"  | awk '{print $5 "\t" $6-1 "\t" $7 "\t" $10}'  > Telomere_5mer.bed
 
 
 #Ribosomal DNA
 
-barrnap="/crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/barrnap/slurm/barrnap.DToL.output"
+barrnap="../barrnap/slurm/barrnap.DToL.output"
 
 
 
 
 #Structural variants
 
-dir="/crex/proj/uppstore2017185/b2014034_nobackup/Jesper/SegDup/odds_ratio/tracks"
+dir="../odds_ratio/tracks"
 
 pop="Ljuvernica_SWE"
 poplist="samples.list.SWEjuv"
