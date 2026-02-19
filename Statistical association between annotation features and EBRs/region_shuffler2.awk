@@ -7,7 +7,7 @@
 # Jesper Boman                      30 jan 2026
 # ==========================================================================================================
 # # # # # # # # # # # # # # # # # # # # # # # # # # # ## # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Usage: awk -v genome_len=$genome_len -v RANDOM=$RANDOM -f region_shuffler.awk $faidx file.bed
+# Usage: awk -v genome_len=$genome_len -v SEED=$SEED -f region_shuffler.awk $faidx file.bed
 # # # # # # # # # # # # # # # # # # # # # # # # # # # ## # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 # -v genome_len=$genome_len  #Total length of the genome
