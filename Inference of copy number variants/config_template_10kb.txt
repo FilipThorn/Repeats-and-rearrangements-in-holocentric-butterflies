@@ -1,0 +1,15 @@
+#Control file
+[general]
+
+maxThreads=2
+chrLenFile = reference/Lsin_DToL.fasta.fai
+chrFiles = reference/chromosome.fasta #A directory with each chromosome as a separate fasta file
+coefficientOfVariation = 0.05
+ploidy = 2
+window = 10000
+outputDir = Results_10kb
+
+[sample]
+mateFile = ../02_Mapping/
+inputFormat = BAM
+mateOrientation = FR
