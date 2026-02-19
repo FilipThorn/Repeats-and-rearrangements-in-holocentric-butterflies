@@ -1,7 +1,7 @@
 # Repeats-and-rearrangements-in-holocentric-butterflies
 Repeats and structural variants are associated with chromosomal rearangements in holocentric butterflies. 
 
-This repository contains code and files associated with the manuscrip `Determinants of chromosomal rearrangements in holocentric Leptidea butterflies`.
+This repository contains code and files associated with the manuscript `Determinants of chromosomal rearrangements in holocentric Leptidea butterflies`.
 
 1) Inference of chromosomal rearrangements and evolutionary breakpoint regions
 2) Sequence tracks and segmental duplications
