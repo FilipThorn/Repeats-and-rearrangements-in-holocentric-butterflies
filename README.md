@@ -15,7 +15,7 @@ This repository contains code and files associated with the manuscript `Determin
 9) 09_Inference of structural variants from short-read sequence data
 
 
-##File structure
+## File structure
 ```bash
 .
 ├── 01_Trimming
