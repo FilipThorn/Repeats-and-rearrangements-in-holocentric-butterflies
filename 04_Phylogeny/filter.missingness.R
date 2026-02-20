@@ -1,3 +1,5 @@
+#!/usr/bin/env Rscript
+
 sum<-read.table("../Busco_phylo/summary_per_file.txt", header=T)
 
 bot99<-sum[!sum$Missing_percent > quantile(sum$Missing_percent,prob=1-1/100),]
