@@ -16,7 +16,7 @@ This repository contains code and files associated with the manuscript `Determin
 
 
 ##File structure
-´´´bash
+```bash
 .
 ├── 01_Trimming
 │   ├── README.md
@@ -66,4 +66,4 @@ This repository contains code and files associated with the manuscript `Determin
 │   └── multi_sample_bed_from_SV-vcf.sh
 ├── LICENSE
 └── README.md
-´´´
+```
