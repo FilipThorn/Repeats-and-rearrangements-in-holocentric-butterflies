@@ -1,9 +1,4 @@
 #!/bin/bash
-#SBATCH -J Parliament2 
-#SBATCH -A "naiss2023-5-394"
-#SBATCH -p core -n 4
-#SBATCH -t 2:00:00
-
 while getopts b:g:o: flag 
 do
 case "${flag}" in
@@ -19,8 +14,8 @@ case "${flag}" in
 done
 
 cp $BAM $SNIC_TMP
-#cp $BAM.bai $SNIC_TMP #also copy the .bai index
-genfiles="${GEN%.*}" #creates a variable where the name of the ref genome is stored without the extension to copy all dict and fai files
+cp $BAM.bai $SNIC_TMP 
+genfiles="${GEN%.*}" 
 cp $genfiles* $SNIC_TMP
 
 cd $SNIC_TMP
