@@ -1,0 +1,1700 @@
+---
+title: "EBR identification"
+author: "Filip Thörn"
+date: '2025-11-04'
+output: html_document
+---
+
+#required packages 
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(data.table)
+library(ggtree)
+library(GenomicRanges)
+library(cowplot)
+```
+
+#EBR notes
+Make a look up table of from 0 to fasta index end of each chromosome for all buscos counting from 5' to 3' end. 
+The breakpoints should go from last the BUSCO of the synteny block (of each scaffold) to the next busco on the reference chromosome. 
+The same should be done for the first Busco on the following synteny block but in the opposit direction. 
+Keep track of the direction of the synteny block on the reference (count one previous row and one following row).
+
+In the map files the buscos should be numbered 1 to n, from 5' to 3' end.
+
+Each detection of a breakpoint should save the busco on either synteny block and count the next busco on the reference (As described above)
+
+#READ DATA and define subsets
+```{r}
+#setwd("./")
+#Lists of samples used to read all gene lists. Used in 
+all_species<-c("LjuvernicaSweF","LjuvernicaSweM",
+               "LrealiCatF", "LrealiCatM",
+               "LsinapisSweF", "LsinapisSweM",
+               "LsinapisAstM", "LsinapisCatF", "LsinapisCatM")
+
+
+#List of samples for external tip EBRs
+species<-c("LjuvernicaSwe", "LrealiCat", "LsinapisSwe", "LsinapisCat")
+
+header_F<-c("CHROM_F", "START_F", "STOP_F", "ORIENTATION_F", "FILE_F")
+header_M<-c("CHROM_M", "START_M", "STOP_M", "ORIENTATION_M", "FILE_M")
+
+ref<-read.table("BUSCO_basic/geneLists/genes.LsinapisAstM.busco.list")
+colnames(ref)<-c("CHROM", "START_R", "STOP_R", "ORIENTATION_R", "FILE_R")
+ref$buscoID<-str_split(ref$FILE_R, pattern="_", simplify = T )[,2] #Extract busco gene names
+
+#Read and prepare chromosome names for the Asturian reference 
+AST_chrm<-read.csv("./Asturian_DToL_chr_name_map.txt", header=F, sep=" ") #Add short chromosome names
+AST_chrm$short<-paste0("Chr_", AST_chrm$V3)
+AST_chrm$V2<-NULL
+AST_chrm$V3<-NULL
+colnames(AST_chrm)<-c("CHROM", "CHROM_R")
+ref_chr<-merge(ref, AST_chrm, by="CHROM")
+ref_chr$CHROM<-NULL
+
+
+#Read lengths of the Asturian reference genome
+len<-read.table("./Astrurian_DToL_chr_length.txt")
+len$Z<-str_replace_all(len$V1, "Chr_48", "Chr_Z")
+
+
+#Read the data for the phylogeny for calculating rates of EBRs across branches
+tree<-read.tree("../Busco_phylo/run5/Reroot.Leptidea.mafft.0.2_trimal.top1percentremoved.contree")
+```
+
+
+#BUSCOS present across all assemblies
+make a list of all buscos present in all assemblies for dowinstream filterning. 
+
+```{r}
+
+for( i in 1:length(all_species)){
+  busco_tmp <- read.table(paste0("BUSCO_basic/geneLists/genes.", all_species[i], ".busco.list"))
+  
+  busco_tmp$buscoID<-str_split(busco_tmp$V5, pattern="_", simplify = T )[,2]
+  
+  busco_tmp[,c(1,2,3,4,5)] <-NULL
+  
+  busco_list<-inner_join(busco_list, busco_tmp)
+}
+
+```
+
+
+#EBRs for external tip combinations
+```{r}
+
+#dataframes
+bp_fis_FMR<-data.frame()
+bp_fus_FMR<-data.frame()
+#block_FMR_df2<-data.frame()
+block_FMR_df2_filt<-data.frame()
+
+for(i in 1:length(species)){
+  
+  sF<-read.table(paste0("BUSCO_basic/geneLists/genes.", species[i],"F.busco.list"))
+  colnames(sF)<-header_F
+  sF$buscoID<-str_split(sF$FILE_F, pattern="_", simplify = T )[,2]
+   if(length(unique(duplicated(sF$buscoID))) > 1){
+    print("Duplicated BUSCO IDs")
+    break
+  }
+  
+  sM<-read.table(paste0("BUSCO_basic/geneLists/genes.", species[i],"M.busco.list"))
+  colnames(sM)<-header_M
+  sM$buscoID<-str_split(sM$FILE_M, pattern="_", simplify = T )[,2]
+  if(length(unique(duplicated(sM$buscoID))) > 1){
+    print("Duplicated BUSCO IDs")
+    break
+  }
+  
+  #Include only BUSCOS present in both 
+  shared_tmp<-c(sM$buscoID, sF$buscoID)
+  
+  shared_FM<-shared_tmp[duplicated(shared_tmp)]
+  
+  shared_FMR_tmp<-c(shared_FM, ref_chr$buscoID)
+  
+  shared_FMR<-shared_FMR_tmp[duplicated(shared_FMR_tmp)]
+  
+  sF_shared<-sF[sF$buscoID %in% shared_FMR,]
+  sM_shared<-sM[sM$buscoID %in% shared_FMR,]
+  merge_FM<-merge(sF_shared,sM_shared, by="buscoID")
+  
+  #Add the ref
+  ref_shared<-ref_chr[ref_chr$buscoID %in% shared_FMR, ]
+  merge_FMR<-merge(merge_FM, ref_shared, by="buscoID")
+  
+  merge_FMR_ord<-merge_FMR[,c(1,2,7,16,3,4,8,9,12,13,5,10,14,6,11,15)] 
+  
+  #First assign blocks based on pairwise comparison of F and M scafs
+  merge_FMR_arr<-merge_FMR_ord[merge_FMR_ord$buscoID %in% busco_list$buscoID,] %>% #Filter for busco ids present in all species here.
+  arrange(CHROM_F, START_F)
+
+  n=1 #keep
+  k=1#keep
+  block_FMR<-data.frame()
+    for(m in 1:length(merge_FMR_arr$CHROM_F)){
+    
+    if(m+1 > length(merge_FMR_arr$CHROM_F)){
+      if(block_FMR$CHROM_M[m-1] == merge_FMR_arr$CHROM_M[m] ){
+        block_FMR<-rbind(block_FMR,cbind(lndf1, block=k ) )
+      }else{
+        k=k+1
+        block_FMR<-rbind(block_FMR,cbind(lndf1, block=k ) )
+      }
+    }else{
+      lndf1<-merge_FMR_arr[m,]
+      lndf2<-merge_FMR_arr[m+1,]
+      if(lndf1$CHROM_F == lndf2$CHROM_F & lndf1$CHROM_M == lndf2$CHROM_M){
+        
+        block_FMR<-rbind(block_FMR,cbind(lndf1, block=k ) )
+        
+      }else{
+       
+        block_FMR<-rbind(block_FMR,cbind(lndf1, block=k ) )
+        k=k+1
+      }
+    }
+    }
+  
+  #Remove blocks >5 Buscos
+  filt_FMR2 <- block_FMR %>%
+  group_by(block) %>%
+  filter(n() >= 5) %>%
+  mutate(BlockStart_R = min(START_R),
+     BlockStop_R = max(STOP_R),
+     BlockStart_F = min(START_F),#
+     BlockStop_F = max(STOP_F),#
+     BlockStart_M = min(START_M),#
+     BlockStop_M = max(STOP_M)) %>%
+  ungroup()
+  
+  #Make the look up table to be used to assign EBR ranges based on the direction of the buscos in 
+  lookup<-data.frame()
+  for(u in 1:length(unique(filt_FMR2$CHROM_R))){
+    C<-filt_FMR2[filt_FMR2$CHROM_R == unique(filt_FMR2$CHROM_R)[u],]
+    Cl<-len[len$Z == unique(filt_FMR2$CHROM_R)[u],]
+    
+    ordC_tmp<- C %>% 
+      arrange(START_R)
+    
+    ordC<-ordC_tmp[,c(9,10,13,16,1,4)]
+    
+    ordCl<-rbind(cbind(START_R=0, STOP_R=0, ORIENTATION_R=0, FILE_R="START", buscoID="START",CHROM_R=unique(filt_FMR2$CHROM_R)[u]), 
+            ordC,
+            cbind(START_R=Cl$V2, STOP_R=Cl$V2, ORIENTATION_R=0, FILE_R="STOP", buscoID="STOP",CHROM_R=unique(filt_FMR2$CHROM_R)[u]))
+    
+    
+    
+    ordCl$BUSCO_ORDER <- 1:nrow(ordCl)
+
+    lookup<-rbind(lookup, ordCl)
+  }
+  
+   
+  #Assign blocks based on the Reference coordinate system. 
+  block_FMR_tmp_arr<-filt_FMR2 %>%
+  arrange(CHROM_R, START_R)
+
+  n=1 #keep
+  k=1#keep
+  block_FMR_R<-data.frame()
+    for(m in 1:length(block_FMR_tmp_arr$CHROM_R)){
+    
+    if(m+1 > length(block_FMR_tmp_arr$CHROM_R)){
+      if(block_FMR_tmp_arr$CHROM_R[m-1] == block_FMR_tmp_arr$CHROM_R[m] & block_FMR_tmp_arr$block[m-1] == block_FMR_tmp_arr$block[m]){
+        block_FMR_R<-rbind(block_FMR_R,cbind(lndf1, block_R=k ) )
+      }else{
+        k=k+1
+        block_FMR_R<-rbind(block_FMR_R,cbind(lndf1, block_R=k ) )
+      }
+    }else{
+      lndf1<-block_FMR_tmp_arr[m,]
+      lndf2<-block_FMR_tmp_arr[m+1,]
+      if(lndf1$CHROM_R == lndf2$CHROM_R & lndf1$block == lndf2$block){
+        
+        block_FMR_R<-rbind(block_FMR_R,cbind(lndf1, block_R=k ) )
+        
+      }else{
+       
+        block_FMR_R<-rbind(block_FMR_R,cbind(lndf1, block_R=k ) )
+        k=k+1
+      }
+    }
+    }    
+    
+    #Add start and stop of blocks relative to the reference coordinate system
+    filt_FMR_R <- block_FMR_R %>%
+      group_by(block_R) %>%
+      mutate(BlockStart_Rvis = min(START_R),
+             BlockStop_Rvis = max(STOP_R)) %>%
+      ungroup()
+
+    block_FMR_df2_filt<-rbind(block_FMR_df2_filt, filt_FMR_R)
+    
+    
+    #Extract EBRs 
+    
+      for(e in 1:length(unique(filt_FMR2$CHROM_M))){
+        
+        bptmp1<-filt_FMR2[filt_FMR2$CHROM_M == unique(filt_FMR2$CHROM_M)[e],]
+
+
+        if(length(paste0(unique(bptmp1$block),":", unique(bptmp1$CHROM_M), ":", unique(bptmp1$CHROM_F))) > 1){
+          
+          
+          bp1<- bptmp1 %>% 
+            arrange(CHROM_M, START_M)
+
+          #Different in DToL same in CAR
+          for(r in 1:length(bp1$CHROM_F)){
+
+            if(r+1 > length(bp1$CHROM_F) ){
+
+            }else{
+              if(bp1[r,]$CHROM_F != bp1[r+1,]$CHROM_F ){
+                    
+                
+                  #First end              
+                  BuscoStart_R=bp1[r,]$START_R
+                  BuscoStop_R=bp1[r,]$STOP_R
+                  BuscoStart_F=bp1[r,]$START_F
+                  BuscoStop_F=bp1[r,]$STOP_F
+                  BuscoStart_M=bp1[r,]$START_M
+                  BuscoStop_M=bp1[r,]$STOP_M
+                  BuscoID1=bp1[r,]$buscoID
+                  BuscoID2=bp1[r+1,]$buscoID
+                  BuscoIDR1=bp1[r,]$buscoID
+                  line="r"
+                  
+                  if(bp1[r,]$CHROM_R != bp1[r-1,]$CHROM_R ){
+                    print("No previous BUSCO 1")
+                  }else{
+                  
+                    #For 5` to 3` order in ref
+                    if(bp1[r-1,]$START_R < bp1[r,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp1[r,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                        BPStopR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_R
+                        BPStartR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$STOP_R
+                      
+                    }
+                    
+                    #For 3` to 5` order in ref
+                    if(bp1[r-1,]$START_R > bp1[r,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp1[r,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                        BPStartR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_R
+                        BPStopR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$START_R
+                      
+                    }
+  
+                    
+                    bp_fis_FMR<-rbind(bp_fis_FMR, cbind(bp1[r,], Fis=paste0("Fis",n),
+                                                        BuscoStart_R,BuscoStop_R,
+                                                        BuscoStart_F,BuscoStop_F,
+                                                        BuscoStart_M,BuscoStop_M,
+                                                        BuscoID1,BuscoID2,
+                                                        BuscoIDR1,BuscoIDR2,
+                                                        BPStartR,BPStopR,
+                                                        line))
+                 
+                    
+                  }
+  
+                  #Other end
+                  
+                  BuscoStart_R=bp1[r+1,]$START_R
+                  BuscoStop_R=bp1[r+1,]$STOP_R
+                  BuscoStart_F=bp1[r+1,]$START_F
+                  BuscoStop_F=bp1[r+1,]$STOP_F
+                  BuscoStart_M=bp1[r+1,]$START_M
+                  BuscoStop_M=bp1[r+1,]$STOP_M
+                  BuscoID1=bp1[r,]$buscoID
+                  BuscoID2=bp1[r+1,]$buscoID
+                  BuscoIDR1=bp1[r+1,]$buscoID
+                  line="r+1"
+                  
+                  if(bp1[r+1,]$CHROM_R != bp1[r+2,]$CHROM_R ){
+                    print("No following BUSCO 2")
+                  }else{
+                  
+                    #For 5` to 3` order in ref
+                    if(bp1[r+1,]$START_R < bp1[r+2,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp1[r+1,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                        BPStartR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_R
+                        BPStopR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$START_R
+                      
+                    }
+                    
+                    #For 3` to 5` order in ref
+                    if(bp1[r+1,]$START_R > bp1[r+2,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp1[r+1,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                        BPStopR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_R
+                        BPStartR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$STOP_R
+                      
+                    }
+  
+                    
+                    bp_fis_FMR<-rbind(bp_fis_FMR, cbind(bp1[r+1,], Fis=paste0("Fis",n),
+                                                        BuscoStart_R,BuscoStop_R,
+                                                        BuscoStart_F,BuscoStop_F,
+                                                        BuscoStart_M,BuscoStop_M,
+                                                        BuscoID1,BuscoID2,
+                                                        BuscoIDR1,BuscoIDR2,
+                                                        BPStartR,BPStopR,
+                                                        line))
+                    n=n+1
+                    
+                  }
+  
+                                  
+            }else{
+            }
+              }
+            }
+      }
+
+      }
+    
+          for(e in 1:length(unique(filt_FMR2$CHROM_F))){
+        
+        bptmp2<-filt_FMR2[filt_FMR2$CHROM_F == unique(filt_FMR2$CHROM_F)[e],]
+        
+        if(length(paste0(unique(bptmp2$block),":", unique(bptmp2$CHROM_M), ":", unique(bptmp2$CHROM_F))) > 1){
+        
+          bp2<- bptmp2 %>% 
+            arrange(CHROM_F, START_F)
+          #Different in CAR same DToL
+
+          for(r in 1:length(bp2$CHROM_M)){
+
+
+            if(r+1 > length(bp2$CHROM_M) ){
+
+            }else{
+
+              if(bp2[r,]$CHROM_M != bp2[r+1,]$CHROM_M ){
+                
+                               
+                  #First end              
+                  BuscoStart_R=bp2[r,]$START_R
+                  BuscoStop_R=bp2[r,]$STOP_R
+                  BuscoStart_F=bp2[r,]$START_F
+                  BuscoStop_F=bp2[r,]$STOP_F
+                  BuscoStart_M=bp2[r,]$START_M
+                  BuscoStop_M=bp2[r,]$STOP_M
+                  BuscoID1=bp2[r,]$buscoID
+                  BuscoID2=bp2[r+1,]$buscoID
+                  BuscoIDR1=bp2[r,]$buscoID
+                  line="r"
+                  
+                  if(bp2[r,]$CHROM_R != bp2[r-1,]$CHROM_R ){
+                    print("No previous BUSCO 3")
+                  }else{
+                  
+                    #For 5` to 3` order in ref
+                    if(bp2[r-1,]$START_R < bp2[r,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp2[r,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                        BPStopR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_R
+                        BPStartR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$STOP_R
+                      
+                    }
+                    
+                    #For 3` to 5` order in ref
+                    if(bp2[r-1,]$START_R > bp2[r,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp2[r,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                        BPStartR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_R
+                        BPStopR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$START_R
+                      
+                    }
+  
+                    
+                    bp_fus_FMR<-rbind(bp_fus_FMR, cbind(bp2[r,], Fus=paste0("Fus",n),
+                                                        BuscoStart_R,BuscoStop_R,
+                                                        BuscoStart_F,BuscoStop_F,
+                                                        BuscoStart_M,BuscoStop_M,
+                                                        BuscoID1,BuscoID2,
+                                                        BuscoIDR1,BuscoIDR2,
+                                                        BPStartR,BPStopR,
+                                                        line))
+                    
+                    
+                  }
+  
+                  #Other end
+                  
+                  BuscoStart_R=bp2[r+1,]$START_R
+                  BuscoStop_R=bp2[r+1,]$STOP_R
+                  BuscoStart_F=bp2[r+1,]$START_F
+                  BuscoStop_F=bp2[r+1,]$STOP_F
+                  BuscoStart_M=bp2[r+1,]$START_M
+                  BuscoStop_M=bp2[r+1,]$STOP_M
+                  BuscoID1=bp2[r,]$buscoID
+                  BuscoID2=bp2[r+1,]$buscoID
+                  BuscoIDR1=bp2[r+1,]$buscoID
+                  line="r+1"
+                  
+                  if(bp2[r+1,]$CHROM_R != bp2[r+2,]$CHROM_R ){
+                    print(paste0("No following BUSCO 4 ", bp2[r+1,]$CHROM_R ," ", bp2[r,]$CHROM_R))
+                    if(bp2[r,]$CHROM_R != bp2[r+1,]$CHROM_R ){
+                      print("N0 previous BUSCO 5")
+                    }else{
+                      #For 5` to 3` order in ref
+                        if(bp2[r,]$START_R < bp2[r+1,]$START_R){
+                          
+                            cur_chr<-lookup[lookup$CHROM_R == bp2[r+1,]$CHROM_R,]
+                            
+                            cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                          
+                            BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                            BPStartR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_R
+                            BPStopR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$START_R
+                          
+                        }
+                        
+                        #For 3` to 5` order in ref
+                        if(bp2[r,]$START_R > bp2[r+1,]$START_R){
+                          
+                            cur_chr<-lookup[lookup$CHROM_R == bp2[r+1,]$CHROM_R,]
+                            
+                            cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                          
+                            BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                            BPStopR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_R
+                            BPStartR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$STOP_R
+                          
+                        }
+      
+                        
+                        bp_fus_FMR<-rbind(bp_fus_FMR, cbind(bp2[r+1,], Fus=paste0("Fus",n),
+                                                            BuscoStart_R,BuscoStop_R,
+                                                            BuscoStart_F,BuscoStop_F,
+                                                            BuscoStart_M,BuscoStop_M,
+                                                            BuscoID1,BuscoID2,
+                                                            BuscoIDR1,BuscoIDR2,
+                                                            BPStartR,BPStopR,
+                                                            line))
+                        n=n+1
+                        
+                   }
+                  }else{
+                  
+                    #For 5` to 3` order in ref
+                    if(bp2[r+1,]$START_R < bp2[r+2,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp2[r+1,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                        BPStartR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_R
+                        BPStopR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$START_R
+                      
+                    }
+                    
+                    #For 3` to 5` order in ref
+                    if(bp2[r+1,]$START_R > bp2[r+2,]$START_R){
+                      
+                        cur_chr<-lookup[lookup$CHROM_R == bp2[r+1,]$CHROM_R,]
+                        
+                        cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$BUSCO_ORDER
+                      
+                        BuscoIDR2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                        BPStopR=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_R
+                        BPStartR=cur_chr[cur_chr$buscoID ==  BuscoIDR1, ]$STOP_R
+                      
+                    }
+  
+                    
+                    bp_fus_FMR<-rbind(bp_fus_FMR, cbind(bp2[r+1,], Fus=paste0("Fus",n),
+                                                        BuscoStart_R,BuscoStop_R,
+                                                        BuscoStart_F,BuscoStop_F,
+                                                        BuscoStart_M,BuscoStop_M,
+                                                        BuscoID1,BuscoID2,
+                                                        BuscoIDR1,BuscoIDR2,
+                                                        BPStartR,BPStopR,
+                                                        line))
+                    n=n+1
+                    
+                  }
+              }else{
+
+
+              }
+            }
+            }
+          }
+      }
+    
+}
+
+
+#Assign the NODE label based on sample id matching based on Phylogeny
+
+block_FMR_df2_filt$sF<-str_split(block_FMR_df2_filt$FILE_F,".busco", simplify = T )[,1]
+block_FMR_df2_filt$sM<-str_split(block_FMR_df2_filt$FILE_M,".busco", simplify = T )[,1]
+block_FMR_df2_filt$sR<-str_split(block_FMR_df2_filt$FILE_R,".busco", simplify = T )[,1]
+block_FMR_df2_filt<- block_FMR_df2_filt %>% 
+              mutate(NODE = ifelse(sF == "LsinapisSweF", "N5", 
+                                   ifelse(sF == "LjuvernicaSweF", "N2", 
+                                          ifelse(sF == "LrealiCatF", "N4",
+                                                 ifelse(sF == "LsinapisCatF", "N7", NA)))))
+
+
+bp_fis_FMR$sF<-str_split(bp_fis_FMR$FILE_F,".busco", simplify = T )[,1]
+bp_fis_FMR$sM<-str_split(bp_fis_FMR$FILE_M,".busco", simplify = T )[,1]
+bp_fus_FMR$sF<-str_split(bp_fus_FMR$FILE_F,".busco", simplify = T )[,1]
+bp_fus_FMR$sM<-str_split(bp_fus_FMR$FILE_M,".busco", simplify = T )[,1]
+
+bp_fis_FMR <- bp_fis_FMR %>% 
+              mutate(NODE = ifelse(sF == "LsinapisSweF", "N5", ifelse(sF == "LjuvernicaSweF", "N2", NA)))
+
+bp_fus_FMR <- bp_fus_FMR %>% 
+              mutate(NODE = ifelse(sF == "LsinapisSweF", "N5", ifelse(sF == "LjuvernicaSweF", "N2", NA)))
+
+
+#Check that EBR start position is smaller than EBR stop position
+as.numeric(bp_fis_FMR$BPStartR) < as.numeric(bp_fis_FMR$BPStopR)
+as.numeric(bp_fus_FMR$BPStartR) < as.numeric(bp_fus_FMR$BPStopR)
+
+```
+
+#Agora ortholists preparation
+Busco gene mapping to the Asturian reference system 
+```{r}
+
+OrthoList_folder <-  "BUSCO_basic/withData"
+OrthoList_fussion <- list.files(OrthoList_folder, full.names = TRUE, pattern = "OrthoList_N")
+
+#grep for all samples execept the reference
+samples<-OrthoList_fussion[!grepl("AstM",OrthoList_fussion)]
+
+new_coords<-data.frame()
+for(l in 1:length(samples)){
+
+  ref= OrthoList_fussion[grepl(paste0(unlist(str_split(samples[l], "_"))[3],"_LsinapisAstM"),OrthoList_fussion)] 
+  sam=samples[l] 
+  
+  if(length(ref)==0){
+    
+    print("No NODE support for ref")
+    }else{
+  
+    data_ref<-read.csv(ref, sep = "\t", header=F)
+    colnames(data_ref)<-c("CHROM_DToL", "START_DToL", "STOP_DToL", "ORIENTATION_DToL", "FILE_DToL", "ANC_CHROM_DToL", "ANC_START_DToL", "ANC_STOP_DToL", "ANC_ORIENTATION_DToL", "BUSCO")
+    
+    data_ref<-data_ref[!grepl("singleton", data_ref$ANC_CHROM_DToL ),]
+    
+    data_ref2<-data.frame()
+    for(i in 1:length(data_ref$ANC_START_DToL)){
+      if(data_ref$ANC_START_DToL[i]<=data_ref$ANC_STOP_DToL[i]){
+        data_ref2<-rbind(data_ref2, cbind(join=paste0(data_ref$ANC_CHROM_DToL[i],":",data_ref$ANC_START_DToL[i], "-",data_ref$ANC_STOP_DToL[i]), data_ref[i,]))
+      }else{
+        data_ref2<-rbind(data_ref2, cbind(join=paste0(data_ref$ANC_CHROM_DToL[i],":",data_ref$ANC_STOP_DToL[i], "-",data_ref$ANC_START_DToL[i]), data_ref[i,]))
+      }
+    }
+    
+    data<-read.csv(sam, sep = "\t", header=F)
+    colnames(data)<-c("CHROM", "START", "STOP", "ORIENTATION", "FILE", "ANC_CHROM", "ANC_START", "ANC_STOP", "ANC_ORIENTATION", "BUSCO")
+    
+    data<-data[!grepl("singleton", data$ANC_CHROM ),]
+    
+    data2<-data.frame()
+    for(i in 1:length(data$ANC_START)){
+      if(data$ANC_START[i]<=data$ANC_STOP[i]){
+        data2<-rbind(data2, cbind(join=paste0(data$ANC_CHROM[i],":",data$ANC_START[i], "-",data$ANC_STOP[i]), data[i,]))
+      }else{
+        data2<-rbind(data_2, cbind(join=paste0(data$ANC_CHROM[i],":",data$ANC_STOP[i], "-",data$ANC_START[i]), data[i,]))
+      }
+    }
+    
+    data2$SPECIES<-unlist(str_split(sam, pattern="_"))[4]
+    
+    dr2<-data_ref2[!duplicated(data_ref2$join) & !duplicated(data_ref2$BUSCO),]
+    d2<-data2[!duplicated(data2$join) & !duplicated(data2$BUSCO),]
+    
+    data_join<-inner_join(x = dr2, y = d2, by = c( "join","BUSCO"))
+    
+    identical(data_join$ANC_CHROM_DToL,data_join$ANC_CHROM_DToL)
+    identical(data_join$ANC_START_DToL,data_join$ANC_START_DToL)
+    identical(data_join$ANC_STOP_DToL,data_join$ANC_STOP_DToL)
+    
+    data_join$ANC_CHROM_DToL<-NULL
+    data_join$ANC_START_DToL<-NULL
+    data_join$ANC_STOP_DToL<-NULL
+    
+    #Rename chromos
+    AST_chrm<-read.csv("./Asturian_DToL_chr_name_map.txt", header=F, sep=" ")
+    
+    AST_chrm$short<-paste0("Chr_", AST_chrm$V3)
+    
+    AST_chrm$V2<-NULL
+    AST_chrm$V3<-NULL
+    colnames(AST_chrm)<-c("CHROM_DToL", "short")
+    
+    
+    data_join<-merge(data_join, AST_chrm, by="CHROM_DToL")
+    
+    data_join_ord<-data_join[,c(17,19,3,4,5,12,14,15,16,18,8,9,10,11,6,13)] 
+    colnames(data_join_ord)[2]<-"CHROM_DToL"
+    
+    data_join_ord %>% 
+      arrange(CHROM_DToL, START_DToL)
+    
+    data_join_ord %>% 
+      arrange(CHROM, START)
+    
+    #ALWAYS START smaller than STOP
+    unique(data_join_ord$START_DToL <= data_join_ord$STOP_DToL)
+    unique(data_join_ord$START <= data_join_ord$STOP)
+    unique(data_join_ord$ANC_START <= data_join_ord$ANC_STOP)
+    
+    data_join_ord$NODE<-unlist(str_split(samples[l], "_"))[3]
+    new_coords<-rbind(new_coords,data_join_ord )
+    
+    
+    #structure the data for the reference as well
+
+    new_coords_ref<-merge(data_ref2, AST_chrm, by="CHROM_DToL")
+    new_coords_ref$SPECIES<-unlist(str_split(data_ref2$FILE_DToL, ".busco" ))[1]
+    new_coords_ref$CHROM_DToL<-NULL
+    new_coords_ref$join<-NULL
+    new_coords_ref$CHROM<-new_coords_ref$short
+    new_coords_ref$START<-new_coords_ref$START_DToL
+    new_coords_ref$STOP<-new_coords_ref$STOP_DToL
+    new_coords_ref$ORIENTATION<-new_coords_ref$ORIENTATION_DToL
+    new_coords_ref$NODE<-unlist(str_split(samples[l], "_"))[3]
+    new_coords_ref$FILE<-new_coords_ref$FILE_DToL
+
+    
+    new_coords_ref_ord<-new_coords_ref[,c(11,10,1,2,3,5,6,7,8,9,12,13,14,15,16,4,17)]
+    
+    
+    colnames(new_coords_ref_ord)<-c("SPECIES","CHROM_DToL","START_DToL","STOP_DToL","ORIENTATION_DToL","ANC_CHROM","ANC_START","ANC_STOP","ANC_ORIENTATION","BUSCO","CHROM","START","STOP","ORIENTATION","NODE","FILE_DToL","FILE")  
+    
+    
+    new_coords<-rbind(new_coords,new_coords_ref_ord )
+    
+    new_coords<-new_coords[!duplicated(new_coords),]
+    
+    }
+}
+
+unique(new_coords$SPECIES)
+unique(new_coords$NODE)
+
+View(new_coords)
+
+i=1
+for(i in 1:length(unique(new_coords$SPECIES))){
+  
+  sdf<-new_coords[new_coords$SPECIES == unique(new_coords$SPECIES)[i],]
+  
+  j=1
+  for(j in 1:length(unique(sdf$NODE))){
+    ndf<-sdf[sdf$NODE == unique(sdf$NODE)[j],]
+    
+    p=ggplot(ndf, aes(xmin=START_DToL, xmax=STOP_DToL, y=CHROM_DToL, col=ANC_CHROM))+
+      geom_linerange(lwd=2)+
+      guides(col="none")+
+      theme_bw()
+    
+    print(p)
+    }
+  
+}
+
+#Write buscoIDs in the same format as the Straight buscos. 
+
+Agora_data <- new_coords %>% 
+  mutate(buscoID = str_split(FILE, "_", simplify = T)[,2]) 
+
+
+#Check for duplicated busco ids, sanity check
+for(i in 1:length(unique(Agora_data$SPECIES))){
+  
+  sdf<-Agora_data[Agora_data$SPECIES == unique(Agora_data$SPECIES)[i],]
+  
+  j=1
+  for(j in 1:length(gtools::mixedsort(unique(sdf$NODE)))){
+    ndf<-sdf[sdf$NODE == gtools::mixedsort(unique(sdf$NODE))[j],]
+    
+     if(length(unique(duplicated(ndf$buscoID))) > 1){
+      print(paste0(unique(ndf$NODE),"Duplicated BUSCO IDs for:", unique(ndf$SPECIES)))
+      break
+     }else{
+      print(paste0(unique(ndf$NODE),"; No Duplicated BUSCO IDs for:", unique(ndf$SPECIES)))
+  }
+    }
+  
+}
+
+
+
+```
+
+
+#EBR identification for AGORA
+
+```{r}
+
+block_df1<-data.frame() #Blocks background
+
+bp_fis<-data.frame()
+bp_fus<-data.frame()
+#per species identification of EBRs
+for(i in 1:length(unique(Agora_data$SPECIES))){
+  
+  sdf<-Agora_data[Agora_data$SPECIES == unique(Agora_data$SPECIES)[i],]
+  
+  #per node 
+  n=1 #keep
+  for(j in 1:length(unique(sdf$NODE))){
+    ndf<-sdf[sdf$NODE == unique(sdf$NODE)[j],]
+    
+    #MAKE BLOCKS
+    #BLOCKS needs to be based on REF coordinate system but FILTERED <5 BUSCOS based on pairwise comparison of CAR and SPECIES scafs. Breakpoints still have to be found based on pairwise comparison of CAR and SPECIES scafs
+  
+    #First assign blocks based on pairwise comparison of CAR and SPECIES scafs
+    ndf_arr<-ndf[ndf$buscoID %in% busco_list$buscoID, ] %>% #Remove buscos not present in all species
+    arrange(CHROM, START)
+  
+    n=1 #keep
+    k=1#keep
+    blocks<-data.frame()
+      for(m in 1:length(ndf_arr$CHROM)){
+      
+      if(m+1 > length(ndf_arr$CHROM)){
+        if(ndf_arr$ANC_CHROM[m-1] == ndf_arr$ANC_CHROM[m] ){
+          blocks<-rbind(blocks,cbind(lndf1, block=k ) )
+        }else{
+          k=k+1
+          blocks_CHROM<-rbind(blocks_CHROM,cbind(lndf1, block=k ) )
+        }
+      }else{
+        lndf1<-ndf_arr[m,]
+        lndf2<-ndf_arr[m+1,]
+        if(lndf1$CHROM == lndf2$CHROM & lndf1$ANC_CHROM == lndf2$ANC_CHROM){
+          
+          blocks<-rbind(blocks,cbind(lndf1, block=k ) )
+          
+        }else{
+         
+          blocks<-rbind(blocks,cbind(lndf1, block=k ) )
+          k=k+1
+        }
+      }
+      }
+    
+    
+    
+    #Remove blocks >3 Buscos
+    #This limit is lower because the ancestral karotype models are implemented with AGORA
+    filt2 <- blocks %>%
+    group_by(block) %>%
+    filter(n() >= 3) %>%
+    mutate(BlockStart_R = min(START_DToL),
+       BlockStop_R = max(STOP_DToL),
+       BlockStart_CHROM = min(START),
+       BlockStop_CHROM = max(STOP),
+       BlockStart_ANC = min(ANC_START),
+       BlockStop_ANC = max(ANC_STOP)) %>%
+    ungroup()
+      
+    block_df1<-rbind(block_df1, filt2)
+    
+    #MAKE LOOK UP TABLE 
+    len<-read.table("../DELLY/DToL.length")
+    len$Z<-str_replace_all(len$V1, "Chr_48", "Chr_Z")
+    
+    lookup<-data.frame()
+    for(u in 1:length(unique(filt2$CHROM_DToL))){
+      C<-filt2[filt2$CHROM_DToL == unique(filt2$CHROM_DToL)[u],]
+      Cl<-len[len$Z == unique(filt2$CHROM_DToL)[u],]
+      
+      ordC_tmp<- C %>% 
+        arrange(START_DToL)
+      
+      ordC<-ordC_tmp[,c(3,4,5,15,18,2)]
+      
+      ordCl<-rbind(cbind(START_DToL=0, STOP_DToL=0, ORIENTATION_DToL=0, FILE_DToL="START", buscoID="START", CHROM_DToL=unique(filt2$CHROM_DToL)[u]), 
+              ordC,
+              cbind(START_DToL=Cl$V2, STOP_DToL=Cl$V2, ORIENTATION_DToL=0, FILE_DToL="STOP", buscoID="STOP", CHROM_DToL=unique(filt2$CHROM_DToL)[u]))
+      
+      
+      
+      ordCl$BUSCO_ORDER <- 1:nrow(ordCl)
+  
+      lookup<-rbind(lookup, ordCl)
+    }
+    
+    #Extract EBRs
+    #First loop deals with Fissions
+    for(e in 1:length(unique(filt2$ANC_CHROM))){
+      
+      bp1_tmp<-filt2[filt2$ANC_CHROM == unique(filt2$ANC_CHROM)[e],]
+
+
+      if(length(paste0(unique(bp1_tmp$block),":", unique(bp1_tmp$ANC_CHROM), ":", unique(bp1_tmp$CHROM))) > 1){
+        
+
+        bp1<- bp1_tmp %>% 
+          arrange(ANC_CHROM, ANC_START)
+
+        #Different in DToL same in CAR
+        for(r in 1:length(bp1$CHROM)){
+
+          if(r+2 > length(bp1$CHROM) | r-1 == 0 ){ #Excludes blocks of a single busco at the end of alignments
+
+          }else{
+
+            if(bp1[r,]$CHROM != bp1[r+1,]$CHROM ){
+                  
+              #First end              
+              BuscoStart_DToL=bp1[r,]$START_DToL
+              BuscoStop_DToL=bp1[r,]$STOP_DToL
+              BuscoStart_CHROM=bp1[r,]$START
+              BuscoStop_CHROM=bp1[r,]$STOP
+              BuscoStart_ANC=bp1[r,]$ANC_START
+              BuscoStop_ANC=bp1[r,]$ANC_STOP
+              BuscoID1=bp1[r,]$buscoID
+              BuscoID2=bp1[r+1,]$buscoID
+              BuscoIDDToL1=bp1[r,]$buscoID
+              line="r"
+              
+              if(bp1[r,]$CHROM_DToL != bp1[r-1,]$CHROM_DToL){
+                print(paste0("First loop: No previous BUSCO ",e, " Species:", unique(Agora_data$SPECIES)[i]))
+                
+                if(bp1[r,]$CHROM_DToL != bp1[r+1,]$CHROM_DToL){
+                  print(paste0("First loop:  No following BUSCO  ",e, " Species:", unique(Agora_data$SPECIES)[i]))
+                }
+                 
+              }else{
+              
+                #For 5` to 3` order in ref
+                if(bp1[r-1,]$START_DToL < bp1[r,]$START_DToL){
+                  
+                    cur_chr<-lookup[lookup$CHROM_DToL == bp1[r,]$CHROM_DToL,]
+                    
+                    cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                  
+                    BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_DToL)
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$STOP_DToL)
+                    
+                    if(BPStopDToL < BPStartDToL){
+                      BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+2),]$START_DToL)
+                      
+                    }
+                  
+                }
+                
+                #For 3` to 5` order in ref
+                if(bp1[r-1,]$START_DToL > bp1[r,]$START_DToL){
+                  
+                    cur_chr<-lookup[lookup$CHROM_DToL == bp1[r,]$CHROM_DToL,]
+                    
+                    cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                  
+                    BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_DToL)
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$START_DToL)
+                    
+                    if(BPStopDToL < BPStartDToL){
+                      BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-2),]$STOP_DToL)
+                    }
+                  
+                }
+
+                
+                bp_fis<-rbind(bp_fis, cbind(bp1[r,], Fis=paste0("Fis",n),
+                                                    BuscoStart_DToL,BuscoStop_DToL,
+                                                    BuscoStart_CHROM,BuscoStop_CHROM,
+                                                    BuscoStart_ANC,BuscoStop_ANC,
+                                                    BuscoID1,BuscoID2,
+                                                    BuscoIDDToL1,BuscoIDDToL2,
+                                                    BPStartDToL,BPStopDToL,
+                                                    line))
+              
+                
+              }
+
+              #Other end
+              
+              BuscoStart_DToL=bp1[r+1,]$START_DToL
+              BuscoStop_DToL=bp1[r+1,]$STOP_DToL
+              BuscoStart_CHROM=bp1[r+1,]$START
+              BuscoStop_CHROM=bp1[r+1,]$STOP
+              BuscoStart_ANC=bp1[r+1,]$ANC_START
+              BuscoStop_ANC=bp1[r+1,]$ANC_STOP
+              BuscoID1=bp1[r,]$buscoID
+              BuscoID2=bp1[r+1,]$buscoID
+              BuscoIDDToL1=bp1[r+1,]$buscoID
+              line="r+1"
+              
+              if(bp1[r+1,]$CHROM_DToL != bp1[r+2,]$CHROM_DToL ){
+                print(paste0("First loop: No following BUSCO ",e, " Species:", unique(Agora_data$SPECIES)[i]))
+                
+                if(bp1[r+1,]$CHROM_DToL != bp1[r,]$CHROM_DToL){
+                  print(paste0("First loop: No previous BUSCO ",e, " Species:", unique(Agora_data$SPECIES)[i]))
+                }
+                
+                n=n+1
+              }else{
+              
+                #For 5` to 3` order in ref
+                if(bp1[r+1,]$START_DToL < bp1[r+2,]$START_DToL){
+                  
+                    cur_chr<-lookup[lookup$CHROM_DToL == bp1[r+1,]$CHROM_DToL,]
+                    
+                    cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                  
+                    BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_DToL)
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$START_DToL)
+                  
+                    if(BPStopDToL < BPStartDToL){
+                      BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-2),]$STOP_DToL)
+                    }
+                    
+                }
+                
+                #For 3` to 5` order in ref
+                if(bp1[r+1,]$START_DToL > bp1[r+2,]$START_DToL){
+                  
+                    cur_chr<-lookup[lookup$CHROM_DToL == bp1[r+1,]$CHROM_DToL,]
+                    
+                    cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                  
+                    BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_DToL)
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$STOP_DToL)
+                    
+                    if(BPStopDToL < BPStartDToL){
+                      BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+2),]$START_DToL)
+                    }
+                  
+                }
+
+                
+                bp_fis<-rbind(bp_fis, cbind(bp1[r+1,], Fis=paste0("Fis",n),
+                                                    BuscoStart_DToL,BuscoStop_DToL,
+                                                    BuscoStart_CHROM,BuscoStop_CHROM,
+                                                    BuscoStart_ANC,BuscoStop_ANC,
+                                                    BuscoID1,BuscoID2,
+                                                    BuscoIDDToL1,BuscoIDDToL2,
+                                                    BPStartDToL,BPStopDToL,
+                                                    line))
+                n=n+1
+                
+              }
+
+            }else{
+
+            }
+          }
+            }
+          }
+    }
+  
+    #This loop assigns Fussions
+    for(e in 1:length(unique(filt2$CHROM))){
+      
+      bp2_tmp<-filt2[filt2$CHROM == unique(filt2$CHROM)[e],]
+      
+      if(length(paste0(unique(bp2_tmp$block),":", unique(bp2_tmp$ANC_CHROM), ":", unique(bp2_tmp$CHROM))) > 1){
+        
+        bp2<- bp2_tmp %>% 
+          arrange(CHROM, START)
+        #Different in CAR same DToL
+        r=1
+        for(r in 1:length(bp2$ANC_CHROM)){
+
+
+          if(r+2 > length(bp2$ANC_CHROM) | r-1 == 0  ){#Excludes blocks of a single busco at the end of alignments
+
+          }else{
+            
+            if(bp2[r,]$ANC_CHROM != bp2[r+1,]$ANC_CHROM ){
+            
+           
+            #First end              
+            BuscoStart_DToL=bp2[r,]$START_DToL
+            BuscoStop_DToL=bp2[r,]$STOP_DToL
+            BuscoStart_CHROM=bp2[r,]$START
+            BuscoStop_CHROM=bp2[r,]$STOP
+            BuscoStart_ANC=bp2[r,]$ANC_START
+            BuscoStop_ANC=bp2[r,]$ANC_STOP
+            BuscoID1=bp2[r,]$buscoID
+            BuscoID2=bp2[r+1,]$buscoID
+            BuscoIDDToL1=bp2[r,]$buscoID
+            line="r"
+            
+            if(bp2[r,]$CHROM_DToL != bp2[r-1,]$CHROM_DToL ){
+              print(paste0("Second loop: No previous BUSCO ",n," ",bp2[r,]$NODE , " Species:", unique(Agora_data$SPECIES)[i]))
+                
+                if(bp2[r,]$CHROM_DToL != bp2[r+1,]$CHROM_DToL){
+                  print(paste0("Second loop: No following BUSCO ",n," ",bp2[r,]$NODE , " Species:", unique(Agora_data$SPECIES)[i]))
+                }
+                
+              
+            }else{
+            
+              #For 5` to 3` order in ref
+              if(bp2[r-1,]$START_DToL < bp2[r,]$START_DToL){
+                
+                  cur_chr<-lookup[lookup$CHROM_DToL == bp2[r,]$CHROM_DToL,]
+                  
+                  cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                
+                  BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                  BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_DToL)
+                  BPStartDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$STOP_DToL)
+                  
+                  if(BPStopDToL < BPStartDToL){
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+2),]$START_DToL)
+                  }
+                  
+                                  
+              }
+              
+              #For 3` to 5` order in ref
+              if(bp2[r-1,]$START_DToL > bp2[r,]$START_DToL){
+                
+                  cur_chr<-lookup[lookup$CHROM_DToL == bp2[r,]$CHROM_DToL,]
+                  
+                  cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                
+                  BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                  BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_DToL)
+                  BPStopDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$START_DToL)
+                  
+                  if(BPStopDToL < BPStartDToL){
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-2),]$STOP_DToL)
+                  }
+                
+              }
+
+              
+              bp_fus<-rbind(bp_fus, cbind(bp2[r,], Fus=paste0("Fus",n),
+                                                  BuscoStart_DToL,BuscoStop_DToL,
+                                                  BuscoStart_CHROM,BuscoStop_CHROM,
+                                                  BuscoStart_ANC,BuscoStop_ANC,
+                                                  BuscoID1,BuscoID2,
+                                                  BuscoIDDToL1,BuscoIDDToL2,
+                                                  BPStartDToL,BPStopDToL,
+                                                  line))
+            
+              
+            }
+
+            #Other end
+            
+            BuscoStart_DToL=bp2[r+1,]$START_DToL
+            BuscoStop_DToL=bp2[r+1,]$STOP_DToL
+            BuscoStart_CHROM=bp2[r+1,]$START
+            BuscoStop_CHROM=bp2[r+1,]$STOP
+            BuscoStart_ANC=bp2[r+1,]$ANC_START
+            BuscoStop_ANC=bp2[r+1,]$ANC_STOP
+            BuscoID1=bp2[r,]$buscoID
+            BuscoID2=bp2[r+1,]$buscoID
+            BuscoIDDToL1=bp2[r+1,]$buscoID
+            line="r+1"
+            
+            if(bp2[r+1,]$CHROM_DToL != bp2[r+2,]$CHROM_DToL ){
+                print(paste0("Second loop: No following BUSCO ",n," ",bp2[r,]$NODE,  " Species:", unique(Agora_data$SPECIES)[i]))
+                
+                if(bp2[r+1,]$CHROM_DToL != bp2[r,]$CHROM_DToL){
+                  print(paste0("Second loop:  No previous BUSCO ",n," ",bp2[r,]$NODE,  " Species:", unique(Agora_data$SPECIES)[i]))
+                }
+              
+
+              n=n+1
+            }else{
+            
+              #For 5` to 3` order in ref
+              if(bp2[r+1,]$START_DToL < bp2[r+2,]$START_DToL){
+                
+                  cur_chr<-lookup[lookup$CHROM_DToL == bp2[r+1,]$CHROM_DToL,]
+                  
+                  cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                
+                  BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$buscoID
+                  BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-1),]$STOP_DToL)
+                  BPStopDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$START_DToL)
+                  
+                  if(BPStopDToL < BPStartDToL){
+                    BPStartDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord-2),]$STOP_DToL)
+                  }
+                
+              }
+              
+              #For 3` to 5` order in ref
+              if(bp2[r+1,]$START_DToL > bp2[r+2,]$START_DToL){
+                
+                  cur_chr<-lookup[lookup$CHROM_DToL == bp2[r+1,]$CHROM_DToL,]
+                  
+                  cur_ord<-cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$BUSCO_ORDER
+                
+                  BuscoIDDToL2=cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$buscoID
+                  BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+1),]$START_DToL)
+                  BPStartDToL=as.numeric(cur_chr[cur_chr$buscoID ==  BuscoIDDToL1, ]$STOP_DToL)
+                  
+                  
+                  if(BPStopDToL < BPStartDToL){
+                    BPStopDToL=as.numeric(cur_chr[cur_chr$BUSCO_ORDER == (cur_ord+2),]$START_DToL)
+                  }
+                
+              }
+
+              
+              bp_fus<-rbind(bp_fus, cbind(bp2[r+1,], Fus=paste0("Fus",n),
+                                                  BuscoStart_DToL,BuscoStop_DToL,
+                                                  BuscoStart_CHROM,BuscoStop_CHROM,
+                                                  BuscoStart_ANC,BuscoStop_ANC,
+                                                  BuscoID1,BuscoID2,
+                                                  BuscoIDDToL1,BuscoIDDToL2,
+                                                  BPStartDToL,BPStopDToL,
+                                                  line))
+              n=n+1
+              
+            }   
+
+            }else{
+
+
+            }
+          }
+          }
+        }
+    }
+  }
+}
+
+#Sanity checks
+unique(as.numeric(bp_fis$BPStartDToL) < as.numeric(bp_fis$BPStopDToL))
+unique(as.numeric(bp_fus$BPStartDToL) < as.numeric(bp_fus$BPStopDToL))
+bp_fus[!as.numeric(bp_fus$BPStartDToL) < as.numeric(bp_fus$BPStopDToL),] 
+```
+#Filter EBRs ranges 
+
+```{r, warning=FALSE}
+
+header=c("CHROM","START","STOP","SPECIES","NODE","BP","BUSCO1","BUSCO2","line","ORG_CHROM")
+#Same format
+colnames(bp_fus)
+colnames(bp_fis)
+colnames(bp_fus_FMR)
+colnames(bp_fis_FMR)
+
+#subset
+#agra
+bp_fus_sh<-bp_fus[,c(2,37,38,10,17,26,35,36,39,12)]
+colnames(bp_fus_sh)<-header
+bp_fis_sh<-bp_fis[,c(2,37,38,10,17,26,35,36,39,12)]
+colnames(bp_fis_sh)<-header
+
+#tips
+bp_fus_F_sh<-bp_fus_FMR[,c(4,35,36,38,40,24,33,34,37,2)]
+colnames(bp_fus_F_sh)<-header
+bp_fis_F_sh<-bp_fis_FMR[,c(4,35,36,38,40,24,33,34,37,2)]
+colnames(bp_fis_F_sh)<-header
+
+#duplicate for male or Female in tips 
+bp_fus_M_sh<-bp_fus_FMR[,c(4,35,36,39,40,24,33,34,37,3)]
+colnames(bp_fus_M_sh)<-header
+bp_fis_M_sh<-bp_fis_FMR[,c(4,35,36,39,40,24,33,34,37,3)]
+colnames(bp_fis_M_sh)<-header
+
+#Male tips need to switch polarity of fis and fus
+
+bp_fis_M_sh$BP<-str_replace_all(bp_fis_M_sh$BP, "Fis", "Fus")
+bp_fus_M_sh$BP<-str_replace_all(bp_fus_M_sh$BP, "Fus", "Fis")
+
+
+breakpoints_tmp<-rbind(bp_fis_sh,bp_fus_sh, bp_fis_F_sh, bp_fus_F_sh, bp_fis_M_sh, bp_fus_M_sh)
+
+View(breakpoints_tmp)
+
+breakpoints<-breakpoints_tmp %>% 
+  group_by(across(all_of(c("BP","NODE","SPECIES")))) %>%
+  filter(n() == 2) %>%
+  mutate(START=as.numeric(START),
+         STOP=as.numeric(STOP))%>%
+  ungroup()
+
+#View(breakpoints)
+
+#Filter the BPs 
+
+#Overlapp intervals and give them a ID based on overlapping ranges on same chromsomes
+
+
+gr <- GRanges(
+  seqnames = breakpoints$CHROM,
+  ranges   = IRanges(start = breakpoints$START, end = breakpoints$STOP)
+)
+
+
+gr_red <- reduce(gr, with.revmap = TRUE)
+
+overlap_id <- integer(length(gr))
+
+for (i in seq_along(gr_red)) {
+  overlap_id[ gr_red$revmap[[i]] ] <- i
+}
+
+breakpoints$overlap_id <- overlap_id
+
+#View(breakpoints)
+
+#Connect both breakpoints with a common name.
+breakpoints_stdN<-data.frame()
+for(i in 1:length(unique(breakpoints$SPECIES))){
+  for(j in 1:length(unique(breakpoints$BP))){
+    for(l in 1:length(unique(breakpoints$NODE))){
+      d<-breakpoints[breakpoints$SPECIES %in% unique(breakpoints$SPECIES)[i] & 
+                       breakpoints$BP %in% unique(breakpoints$BP)[j] &
+                       breakpoints$NODE %in% unique(breakpoints$NODE)[l] ,]
+      
+      sh<-unique(str_remove_all(d$BP, "\\d*" ))
+      id<-c(as.numeric(d$overlap_id))
+      d$stdBP<-paste0(sh,"_", min(id), "-", max(id) )
+      
+      breakpoints_stdN<-rbind(breakpoints_stdN, d)
+    }
+  }
+}
+
+#View(breakpoints_stdN)
+
+
+```
+
+#EBR placement on the phylogeny
+```{r}
+
+
+breakpoints_stdN$combID<-str_remove_all(str_remove_all(breakpoints_stdN$stdBP, "Fis_"), "Fus_")
+
+
+#View(breakpoints_stdN)
+
+
+#Polarise polarise N5; Sinapis Swe
+#These are from N5 which are not included in agora, hence I polarise them based on N3 
+#13-13 Fis sweF
+#4-23 Fus sweF
+#38-12 Fus sweF
+#22-22 Fis sweM
+#26-6 Fis sweF
+#26-6 Fus sweF
+
+sweFN5<-c("59-69", "83-83", "142-167", "100-121") #Should be removed in sinapissweM N5
+sweMN5<-"79-79"  #Should be removed in sinapissweF N5
+
+breakpoints_stdN_tmp<-breakpoints_stdN[!(breakpoints_stdN$SPECIES == "LsinapisSweM" & 
+                                         breakpoints_stdN$NODE == "N5" &
+                                         breakpoints_stdN$combID %in% sweFN5) & 
+                                         !(breakpoints_stdN$SPECIES == "LsinapisSweF" & 
+                                         breakpoints_stdN$NODE == "N5" &
+                                         breakpoints_stdN$combID %in% sweMN5) , ]
+
+
+
+
+#Filter based on phylogeny
+BP_phylo<-breakpoints_stdN_tmp %>% 
+        group_by(stdBP) %>%
+        mutate(highestNODE = as.numeric(str_remove_all(NODE, "N")),
+               split = str_remove_all(BP, "\\d*"),
+               CHROM = str_replace_all(CHROM, "Z", "48")) %>%
+        ungroup() %>%
+        group_by(combID, SPECIES) %>%
+        filter(highestNODE == max(highestNODE)) %>%
+        ungroup()  %>%
+        group_by(combID, SPECIES) %>%
+  ungroup() 
+
+View(BP_phylo)
+
+BP_phylo$id1<-str_split(BP_phylo$combID, "-", simplify = T)[,1]
+BP_phylo$id2<-str_split(BP_phylo$combID, "-", simplify = T)[,2]
+
+
+
+df_long <- BP_phylo %>%
+  pivot_longer(cols = c(id1, id2),
+    names_to = "id_pos",
+    values_to = "id")
+
+
+
+
+id_class <- df_long %>%
+  group_by(SPECIES, id) %>%
+  summarise(n_combID = n_distinct(combID),
+    n_NODE   = n_distinct(NODE),
+      reuse_decendent_tmp = case_when(
+      n_combID >= 2 & n_NODE > 1 ~ "reuse_decendent",
+      TRUE ~ NA_character_  ),
+    translocation_tmp = case_when(
+      n_combID >= 2 & n_NODE == 1 ~ "translocation",
+      TRUE ~ NA_character_  ),
+    .groups = "drop")
+
+
+
+
+id_class$overlap_id<-as.numeric(id_class$id)
+
+df<-left_join(BP_phylo, id_class, by = c("SPECIES", "overlap_id") )
+
+
+
+df2<-df  %>%
+        group_by(combID, SPECIES) %>%
+          mutate(reuse_decendent = case_when(
+            any(reuse_decendent_tmp == "reuse_decendent") ~ "reuse_decendent",
+            TRUE ~ NA),
+            translocation = case_when(
+            any(translocation_tmp == "translocation") ~ "translocation",
+            TRUE ~ NA)
+          ) %>%
+        ungroup() %>%
+        group_by(combID, SPECIES, NODE) %>%
+        mutate(reciprocal_translocation = case_when(
+            any(length(combID) == 4 ) ~ "reciprocal_translocation",
+            TRUE ~ NA)
+          ) %>%
+  ungroup()
+  
+
+
+df3<-df2[,c(1,2,3,4,5,12,7,8,13,15,23,24,25,10)] 
+
+
+colnames(df3)[10]<-"EBR_TYPE"
+colnames(df3)[11]<-"reuse_decendent"
+colnames(df3)[12]<-"translocation"
+
+
+
+
+df3$EBR_TYPE<-case_when(df3$EBR_TYPE == "Fis" & !df3$NODE %in% c("N0", "N2")  ~ "Fission", 
+                      df3$EBR_TYPE == "Fus"  & !df3$NODE %in% c("N0", "N2") ~ "Fusion",
+            TRUE ~ "Unpolarisable")
+
+
+
+
+#Remove EBRs on sex chromosomes that does not make sense and are likely due to misassembly, these are removed as a conserative mesure
+df4 <- df3[!(df3$SPECIES %in% c("LsinapisSweF","LsinapisSweM", "LsinapisCatM", "LsinapisCatF", "LjuvernicaSweF","LjuvernicaSweM", "LsinapisAstM" ) & df3$CHROM == "Chr_3"), ]
+
+
+
+
+
+#Branch specific EBRs
+
+df5<-df4 %>%
+  mutate(BRANCH = case_when(
+             (SPECIES %in% c("LjuvernicaSweF","LjuvernicaSweM")  & NODE == "N0") ~ "AncAll-AncLjuvernica",
+             (!SPECIES %in% c("LjuvernicaSweF","LjuvernicaSweM")  & NODE == "N0") ~ "AncAll-AncLsinapis/Lreali",
+             (SPECIES %in% c("LjuvernicaSweF")  & NODE == "N2") ~ "AncLjuvernica-LjuvernicaSweF",
+             (SPECIES %in% c("LjuvernicaSweM")  & NODE == "N2") ~ "AncLjuvernica-LjuvernicaSweM",
+             (SPECIES %in% c("LrealiCatF","LrealiCatM")  & NODE == "N1") ~ "AncLsinapis/Lreali-LrealiCat",
+             (!SPECIES %in% c("LrealiCatF","LrealiCatM")  & NODE == "N1") ~ "AncLsinapis/Lreali-AncLsinapis",
+             (SPECIES %in% c("LsinapisSweF","LsinapisSweM")  & NODE == "N3") ~ "AncLsinapis-AncLsinapisSwe",
+             (SPECIES %in% c("LsinapisSweF")  & NODE == "N5") ~ "AncLsinapisSwe-LsinapisSweF",
+             (SPECIES %in% c("LsinapisSweM")  & NODE == "N5") ~ "AncLsinapisSwe-LsinapisSweM",
+             (!SPECIES %in% c("LsinapisSweF","LsinapisSweM")  & NODE == "N3") ~ "AncLsinapis-AncLsinapisIberian",
+             (SPECIES %in% c("LsinapisCatF","LsinapisCatM")  & NODE == "N6") ~ "AncLsinapisIberian-LsinapisCat",
+             (!SPECIES %in% c("LsinapisCatF","LsinapisCatM")  & NODE == "N6") ~ "AncLsinapisIberian-LsinapisAst",
+            TRUE ~ NA),
+  ) %>%
+  ungroup()
+
+
+View(df5)
+
+#Write the data frame
+write_delim(df5, file = "leptidea.breakpoints.BranchEBRs.withOrgChroms.tsv", delim = "\t")
+
+```
+ 
+
+
+#Summarise EBRs per branch
+
+```{r}
+
+counts <- df5 %>%
+  group_by(BRANCH, EBR_TYPE) %>%
+  summarise(n = n()/2, 
+            nSPECIES = n_distinct(SPECIES),
+            .groups = "drop"
+            )
+
+View(counts)
+
+
+counts_S <- df5 %>%
+  group_by(SPECIES, EBR_TYPE, BRANCH) %>%
+  summarise(n = n()/2, 
+            nSPECIES = n_distinct(SPECIES),
+            .groups = "drop"
+            )
+
+View(counts_S)
+
+
+#Count translocations
+counts_trans <- df5 %>%
+  group_by(BRANCH, translocation) %>%
+  summarise(n = n()/2, 
+            nSPECIES = n_distinct(SPECIES),
+            .groups = "drop"
+            )
+
+View(counts_trans)
+
+#Count reciprocal translocations
+counts_recitrans <- df5 %>%
+  group_by(BRANCH, reciprocal_translocation) %>%
+  summarise(n = n()/2, 
+            nSPECIES = n_distinct(SPECIES),
+            .groups = "drop"
+            )
+
+
+
+#Largest EBR region
+max(df5[df5$EBR_TYPE %in% c("Fission", "Fussion"),]$STOP-df5[df5$EBR_TYPE %in% c("Fission", "Fussion"),]$START)
+
+#Smallest EBR region
+min(df5[df5$EBR_TYPE %in% c("Fission", "Fussion"),]$STOP-df5[df5$EBR_TYPE %in% c("Fission", "Fussion"),]$START)
+
+```
+
+
+#Busco phylogeny with rates of EBRs
+
+```{r}
+
+#Plot the phylogeny
+p<-ggtree(tree)+ 
+  geom_tiplab(hjust = -.01)+
+  geom_nodelab(hjust = -1, size=3)+
+  theme_tree2() + 
+  scale_x_continuous(expand = expansion(mult = c(0, 0.3))) + 
+  theme_tree()+
+  geom_text2(aes(label = round(branch.length, 4)),
+             hjust = 1.2,
+             vjust = -0.3,
+             size = 3)
+
+p
+
+#Extract the names of parent and child nodes to have unique branch names to transfer EBR data on
+edge_df <- data.frame(
+  edge_id = 1:nrow(tree$edge),
+  parent = tree$edge[,1],
+  child  = tree$edge[,2],
+  branch_length = tree$edge.length
+)
+
+#This order is set manually based on the phylogeny. 
+edge_df$BRANCH<-c("AncAll-AncLsinapis/Lreali", 
+                      "AncLsinapis/Lreali-LrealiCat",
+                      "AncLreali/LrealiCatF",
+                      "AncLreali/LrealiCatM",
+                      "AncLsinapis/Lreali-AncLsinapis",
+                      "AncLsinapis-AncLsinapisIberian",
+                      "AncLsinapisIberian-LsinapisCat",
+                      "LsinapisCat-LsinapisCatM",
+                      "LsinapisCat-LsinapisCatF",
+                      "AncLsinapisIberian-LsinapisAst",
+                      "AncLsinapis-AncLsinapisSwe",
+                      "AncLsinapisSwe-LsinapisSweF",
+                      "AncLsinapisSwe-LsinapisSweM",
+                      "AncAll-AncLjuvernica",
+                      "AncLjuvernica-LjuvernicaSweM",
+                      "AncLjuvernica-LjuvernicaSweF")
+
+
+#Fissions
+count_fis<-counts[counts$EBR_TYPE == "Fission",]
+merged_df_fis <- left_join(edge_df, count_fis, by = "BRANCH")
+
+merged_df_fis$rate<-(merged_df_fis$n/merged_df_fis$nSPECIES)*merged_df_fis$branch_length
+
+merged_df_fis[c(1,14,15,16),]$rate<-"NA" #Set the branches that are unpolarisable to NA; set manually
+merged_df_fis[c(3,4,8,9,11),]$rate<-0 # Assign branches without any events to 0 instead of NA; set manually
+
+#Attach fission rates to the tree file
+rate_df_fis <- data.frame(
+  node = tree$edge[,2],   # child nodes
+  fission_rate = as.numeric(merged_df_fis$rate),
+  events = as.numeric(merged_df_fis$n/merged_df_fis$nSPECIES)
+)
+
+
+#Fusions
+count_fus<-counts[counts$EBR_TYPE == "Fusion",]
+merged_df_fus <- left_join(edge_df, count_fus, by = "BRANCH")
+
+merged_df_fus$rate<-(merged_df_fus$n/merged_df_fus$nSPECIES)*merged_df_fus$branch_length
+
+merged_df_fus[c(1,14,15,16),]$rate<-"NA" #Set the branches that are unpolarisable to NA; set manually
+merged_df_fus[c(3,4,8,9,10,13),]$rate<-0 # Assign branches without any events to 0 instead of NA; set manually
+
+#Attach fusion rates to the tree file
+rate_df_fus <- data.frame(
+  node = tree$edge[,2],   # child nodes
+  fusion_rate = as.numeric(merged_df_fus$rate),
+  events = as.numeric(merged_df_fus$n/merged_df_fus$nSPECIES)
+)
+
+
+#Translocations
+count_trans<-counts_trans[counts_trans$translocation == "translocation",]
+merged_df_trans <- left_join(edge_df, count_trans, by = "BRANCH")
+
+merged_df_trans$rate<-(merged_df_trans$n/merged_df_trans$nSPECIES)*merged_df_trans$branch_length
+
+count_rtrans<-counts_recitrans[counts_recitrans$reciprocal_translocation == "reciprocal_translocation",]
+merged_df_rtrans <- left_join(edge_df, count_rtrans, by = "BRANCH")
+
+merged_df_rtrans$rate<-(merged_df_rtrans$n/merged_df_rtrans$nSPECIES)*merged_df_rtrans$branch_length
+
+merged_df_trans[c(1,14,15,16),]$rate<-"NA" #Set the branches that are unpolarisable to NA; set manually
+merged_df_trans[c(3,4,7,8,9,10,11,13),]$rate<-0 # Assign branches without any events to 0 instead of NA; set manually
+
+merged_df_trans[c(12),]$rate<-merged_df_rtrans[c(12),]$rate # add reciprocal translocations
+merged_df_trans[c(12),]$n<-merged_df_rtrans[c(12),]$n # add reciprocal translocations
+merged_df_trans[c(12),]$nSPECIES<-merged_df_rtrans[c(12),]$nSPECIES # add reciprocal translocations
+
+#Attach translocation rates to tree
+rate_df_trans <- data.frame(
+  node = tree$edge[,2],   # child nodes
+  trans_rate = as.numeric(merged_df_trans$rate),
+  events = as.numeric(merged_df_trans$n/merged_df_trans$nSPECIES)
+)
+
+#For combined header
+rate_scale <- scale_color_gradientn(
+  name = "EB rate",
+    colours = c("grey70", "yellow", "orange","red", "red4"),
+    values = scales::rescale(c(0, 0.0001, 0.03, 0.075, 0.15)),
+  limits = c(0, 0.15),
+  oob = scales::squish,
+  na.value = "black"
+)
+
+legend <- cowplot::get_legend(
+  ggtree(tree) %<+% rate_df_fis +
+    geom_tree(aes(color = fission_rate), size = 1) +
+    rate_scale +
+    theme(legend.position = "right")
+)
+
+pfis <- ggtree(tree) %<+% rate_df_fis +
+  geom_tree(aes(color = fission_rate), size = 2, lineend = "square") +
+  rate_scale +
+  theme_tree() +
+  geom_tiplab(hjust = -0.1, size = 2) +
+  geom_text2(aes(label = events), hjust = 1.8, vjust= -0.5, size=2.1)+ #Events on branches
+  scale_x_continuous(expand = expansion(mult = c(0.1, 0.4)))+ 
+  ggtitle("     Fissions") +
+  theme(legend.position = "none",
+        title = element_text(size=8))
+
+
+
+pfus<-ggtree(tree) %<+% rate_df_fus +
+  geom_tree(aes(color = fusion_rate), size = 2, lineend = "square") +
+  rate_scale +
+  theme_tree2() +
+  geom_tiplab(hjust = -0.1, size = 3) +
+  geom_text2(aes(label = events), hjust = 1.5, vjust= -0.5, size=2.5)+ #Events on branches
+  scale_x_continuous(expand = expansion(mult = c(0.1, 0.4)))+ 
+  ggtitle("     Fusions") +
+  theme(title = element_text(size=8),
+  legend.position = c(0.98, 0.02),   # bottom right (inside plot)
+  legend.justification = c(1, 0),
+  legend.key.height = unit(0.4, "cm"),
+  legend.key.width  = unit(0.4, "cm"),
+  legend.ticks = element_line(colour="black")
+)
+
+
+ptrans<-ggtree(tree) %<+% rate_df_trans +
+  geom_tree(aes(color = trans_rate), size = 2, lineend = "square") +
+  rate_scale +
+  theme_tree() +
+   geom_text2(aes(label = events), hjust = 1.8, vjust= -0.5, size=2.1)+ #Events on branches
+  geom_tiplab(hjust = -0.1, size = 2) +
+  scale_x_continuous(expand = expansion(mult = c(0.1, 0.4)))+ 
+  ggtitle("     Translocations") +
+  theme(legend.position = "none",
+        title = element_text(size=8))
+
+
+
+trees_vertical <- cowplot::plot_grid(
+  pfis,
+  ptrans,
+  ncol = 1,
+  align = "v",
+  axis = "lr",
+  labels = c("B","C")
+)
+
+
+
+
+final_plot <- cowplot::plot_grid(
+  pfus,
+  trees_vertical,
+  ncol = 2,
+  labels= c("A", ""),
+  rel_widths = c(0.65, 0.35)
+)
+
+final_plot
+
+#ggsave("../Busco_phylo/Fig1.pdf",final_plot,  height = 120, width= 180, units = "mm", dpi = 600)
+```
