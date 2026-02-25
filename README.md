@@ -39,7 +39,9 @@ This repository contains code and files associated with the manuscript `Determin
 ├── 05_Inference of chromosomal rearrangements and evolutionary breakpoint regions
 │   ├── Astrurian_DToL_chr_length.txt
 │   ├── Asturian_DToL_chr_name_map.txt
+│   ├── EBR_identification.Rmd
 │   ├── README.txt
+│   ├── leptidea.breakpoints.BranchEBRs.withOrgChroms.tsv
 │   └── plot_breakpoint_map.R
 ├── 06_Sequence tracks and segmental duplications
 │   ├── DBscan.R
@@ -71,5 +73,4 @@ This repository contains code and files associated with the manuscript `Determin
 │   └── multi_sample_bed_from_SV-vcf.sh
 ├── LICENSE
 └── README.md
-
 ```
