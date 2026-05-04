@@ -1,7 +1,8 @@
 ml BEDTools/2.31.1-GCC-13.3.0
 
-#The following gives the CAT sinapis fissions (plus one fusion - that is removed later for Fig. 3)
-grep "N6" leptidea.breakpoints.includingN0.V3.tsv | grep -v "AstM" > LsinapisCat_specific_EBRs.bed
+#CAT fissions
+grep "N6" ../leptidea.breakpoints.BranchEBRs.V5.tsv | grep -v "AstM" | grep -v "Fusion" > LsinapisCat_specific_Fissions.v5.bed
+
 
 
 #SWE fusions
