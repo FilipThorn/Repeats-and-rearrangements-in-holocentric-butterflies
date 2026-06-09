@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/1147181193.svg)](https://doi.org/10.5281/zenodo.20607718)
+
 # Repeats-and-rearrangements-in-holocentric-butterflies
 Repeats and structural variants are associated with chromosomal rearangements in holocentric butterflies. 
 
